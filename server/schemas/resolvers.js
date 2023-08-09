@@ -1,45 +1,64 @@
-const { User } = require('../models')
+const { AuthenticationError } = require('apollo-server-express');
+const { User } = require('../models');
+const { signToken } = require('../utils/auth');
 
 const resolvers = {
     Query: {
-        users: async () => {
-            return await User.find({});
-        },
         user: async (parent, { id }, context) => {
-            return await User.findById(id);
-        }
+            if (context.user) {
+                const userData = await User.findOne({ _id: context.user._id }).select('-__v -password');
 
+                return userData;
+            }
+            throw new AuthenticationError('Not logged in.');
+        }
     },
     Mutation: {
-        // NEED TO ADD signToken LATER, AS CONTEXT
-        createUser: async (parent, { username, email, password }, context) => {
-            return await User.create({ username, email, password });
+        addUser: async (parent, { username, email, password }) => {
+            const user = await User.create({ username, email, password });
+            const token = signToken(user);
+
+            return { token, user };
         },
-        saveBook: async (parent, { id, savedBooks }) => {
-            try {
-                const updatedUser = await User.findOneAndUpdate(
-                    { _id: id },
-                    { $addToSet: { savedBooks: savedBooks } },
-                    { new: true }
-                );
-                return updatedUser;
-            } catch (error) {
-                console.error(error);
-                throw new Error('Unable to save book.');
+        login: async (parent, { email, password }) => {
+            const user = await User.findOne({ email });
+
+            if (!user) {
+                throw new AuthenticationError('Incorrect credentials.');
             }
+
+            const correctPW = await user.isCorrectPassword(password)    // custom method from User model
+
+            if (!correctPW) {
+                throw new AuthenticationError("Incorrect credentials.")
+            }
+
+            const token = signToken(user);
+            return { token, user };
         },
-        deleteBook: async (parent, { id, bookId }) => {
-            try {
-                const updatedUser = await User.findOneAndUpdate(
-                    { _id: id },
-                    { $pull: { savedBooks: { bookId: bookId } } },
+        saveBook: async (parent, { bookData }, context) => {
+            if (context.user) {
+                const updatedUser = await User.findByIdAndUpdate(
+                    { _id: context.user._id },
+                    { $push: { savedBooks: bookData } },
                     { new: true }
                 );
+
                 return updatedUser;
-            } catch (error) {
-                console.error(error);
-                throw new Error('Unable to delete book.');
-            };
+            }
+            throw new AuthenticationError('Must be logged in.');
+        },
+        deleteBook: async (parent, { bookId }, context) => {
+            if (context.user) {
+                const updatedUser = await User.findOneAndUpdate(
+                    { _id: context.user._id },
+                    { $pull: { savedBooks: { bookId } } },
+                    { new: true }
+                );
+
+                return updatedUser;
+            }
+            throw new AuthenticationError('You need to be logged in!');
         },
     },
 };
